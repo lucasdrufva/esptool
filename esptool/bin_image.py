@@ -108,7 +108,7 @@ def LoadFirmwareImage(chip, image_file):
                 raise FatalError("Invalid image magic number: %d" % magic)
 
     if isinstance(image_file, str):
-        with open(image_file, "rb") as f:
+        with open(image_file, "rb+") as f:
             return select_image_class(f, chip)
     return select_image_class(image_file, chip)
 
@@ -655,13 +655,13 @@ class ESP32FirmwareImage(BaseFirmwareImage):
             self.checksum = self.read_checksum(load_file)
 
             if self.append_digest:
-                end = load_file.tell()
+                self.end = load_file.tell()
                 self.stored_digest = load_file.read(32)
                 load_file.seek(start)
                 calc_digest = hashlib.sha256()
-                calc_digest.update(load_file.read(end - start))
+                calc_digest.update(load_file.read(self.end - start))
                 self.calc_digest = calc_digest.digest()  # TODO: decide what to do here?
-                self.data_length = end - start
+                self.data_length = self.end - start
 
             self.verify()
 

@@ -1062,6 +1062,171 @@ def image_info(args):
         pass  # ESP8266 image has no append_digest field
 
 
+def image_repair(args):
+    print(f"File size: {get_file_size(args.filename)} (bytes)")
+    with open(args.filename, "rb") as f:
+        # magic number
+        try:
+            common_header = f.read(8)
+            magic = common_header[0]
+        except IndexError:
+            raise FatalError("File is empty")
+        if magic not in [
+            ESPLoader.ESP_IMAGE_MAGIC,
+            ESP8266V2FirmwareImage.IMAGE_V2_MAGIC,
+        ]:
+            raise FatalError(
+                f"This is not a valid image (invalid magic number: {magic:#x})"
+            )
+
+        if args.chip == "auto":
+            try:
+                extended_header = f.read(16)
+
+                # append_digest, either 0 or 1
+                if extended_header[-1] not in [0, 1]:
+                    raise FatalError("Append digest field not 0 or 1")
+
+                chip_id = int.from_bytes(extended_header[4:5], "little")
+                for rom in [n for n in ROM_LIST if n.CHIP_NAME != "ESP8266"]:
+                    if chip_id == rom.IMAGE_CHIP_ID:
+                        args.chip = rom.CHIP_NAME
+                        break
+                else:
+                    raise FatalError(f"Unknown image chip ID ({chip_id})")
+            except FatalError:
+                args.chip = "esp8266"
+
+            print(f"Detected image type: {args.chip.upper()}")
+
+    image = LoadFirmwareImage(args.chip, args.filename)
+
+    with open(args.filename, "rb+") as f:
+        end = 0
+        if image.append_digest:
+            end = image.end
+            f.seek(end)
+            f.write(image.calc_digest)
+        
+        calc_checksum = image.calculate_checksum()
+        f.seek(end-1, 0)
+        f.write(calc_checksum.to_bytes(1))
+
+
+    def get_key_from_value(dict, val):
+            """Get key from value in dictionary"""
+            for key, value in dict.items():
+                if value == val:
+                    return key
+            return None
+
+    print("Image version: {}".format(image.version))
+    print(
+        "Entry point: {:#8x}".format(image.entrypoint)
+        if image.entrypoint != 0
+        else "Entry point not set"
+    )
+
+    print("Segments: {}".format(len(image.segments)))
+
+    # Flash frequency
+    flash_fr_bits = image.flash_size_freq & 0x0F  # low four bits
+    flash_fr = get_key_from_value(image.ROM_LOADER.FLASH_FREQUENCY, flash_fr_bits)
+    print(
+        "Flash freq: {}".format(flash_fr)
+        if flash_fr is not None
+        else "WARNING: Invalid flash frequency ({:#02x})".format(flash_fr_bits)
+    )
+
+    # Flash mode
+    flash_mode = get_key_from_value(FLASH_MODES, image.flash_mode)
+    print(
+        "Flash mode: {}".format(flash_mode.upper())
+        if flash_mode is not None
+        else "WARNING: Invalid flash mode ({})".format(image.flash_mode)
+    )
+
+    # Extended header (ESP32 and later only)
+    if args.chip != "esp8266":
+        print()
+        title = "{} extended image header".format(args.chip.upper())
+        print(title)
+        print("=" * len(title))
+        print(
+            f"WP pin: {image.wp_pin:#02x}",
+            *["(disabled)"] if image.wp_pin == image.WP_PIN_DISABLED else [],
+        )
+        print(
+            "Flash pins drive settings: "
+            "clk_drv: {:#02x}, q_drv: {:#02x}, d_drv: {:#02x}, "
+            "cs0_drv: {:#02x}, hd_drv: {:#02x}, wp_drv: {:#02x}".format(
+                image.clk_drv,
+                image.q_drv,
+                image.d_drv,
+                image.cs_drv,
+                image.hd_drv,
+                image.wp_drv,
+            )
+        )
+        try:
+            chip = next(
+                chip
+                for chip in CHIP_DEFS.values()
+                if getattr(chip, "IMAGE_CHIP_ID", None) == image.chip_id
+            )
+            print(f"Chip ID: {image.chip_id} ({chip.CHIP_NAME})")
+        except StopIteration:
+            print(f"Chip ID: {image.chip_id} (Unknown ID)")
+        print(
+            "Minimal chip revision: "
+            f"v{image.min_rev_full // 100}.{image.min_rev_full % 100}, "
+            f"(legacy min_rev = {image.min_rev})"
+        )
+        print(
+            "Maximal chip revision: "
+            f"v{image.max_rev_full // 100}.{image.max_rev_full % 100}"
+        )
+    
+        # Footer
+        title = f"{args.chip.upper()} image footer"
+        print(title)
+        print("=" * len(title))
+        calc_checksum = image.calculate_checksum()
+        print(
+            "Checksum: {:#02x} ({})".format(
+                image.checksum,
+                (
+                    "valid"
+                    if image.checksum == calc_checksum
+                    else "invalid - calculated {:02x}".format(calc_checksum)
+                ),
+            )
+        )
+        try:
+            digest_msg = "Not appended"
+            if image.append_digest:
+                is_valid = image.stored_digest == image.calc_digest
+                digest_msg = "{} ({})".format(
+                    hexify(image.calc_digest, uppercase=False),
+                    "valid" if is_valid else "invalid",
+                )
+                print("Validation hash: {}".format(digest_msg))
+
+                if not is_valid:
+                    print("Patching stuff")
+                    with open(args.filename, "rb+") as f:
+                        f.seek(-32, 2)
+                        f.write(image.calc_digest)
+                        f.write(b'\xAA'*32)
+
+                    print("patched to:", hexify(image.calc_digest))
+                    print("stored = ", hexify(image.stored_digest))
+                        
+
+        except AttributeError:
+            pass 
+
+
 def make_image(args):
     print("Creating {} image...".format(args.chip))
     image = ESP8266ROMFirmwareImage()

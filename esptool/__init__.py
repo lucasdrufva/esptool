@@ -13,6 +13,7 @@ __all__ = [
     "flash_id",
     "get_security_info",
     "image_info",
+    "image_repair"
     "load_ram",
     "make_image",
     "merge_bin",
@@ -53,6 +54,7 @@ from esptool.cmds import (
     read_flash_sfdp,
     get_security_info,
     image_info,
+    image_repair,
     load_ram,
     make_image,
     merge_bin,
@@ -403,6 +405,20 @@ def main(argv=None, esp=None):
         "filename", help="Image file to parse", action=AutoHex2BinAction
     )
     parser_image_info.add_argument(
+        "--version",
+        "-v",
+        help="Output format version (1 - legacy, 2 - extended)",
+        choices=["1", "2"],
+        default="1",
+    )
+
+    parser_image_repair = subparsers.add_parser(
+        "image_repair", help="Repair headers on a binary file (bootloader or application)"
+    )
+    parser_image_repair.add_argument(
+        "filename", help="Image file to repair", action=AutoHex2BinAction
+    )
+    parser_image_repair.add_argument(
         "--version",
         "-v",
         help="Output format version (1 - legacy, 2 - extended)",
